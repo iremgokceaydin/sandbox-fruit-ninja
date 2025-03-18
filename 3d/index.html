@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>3D Dojo Fruit Ninja with Variable Slicing Trail</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #222;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            z-index: 1;
+        }
+    </style>
+    <!-- Import map to resolve bare module specifiers -->
+    <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.128.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+
+<body>
+    <div id="score">Score: 0</div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { Line2 } from 'https://unpkg.com/three@0.128.0/examples/jsm/lines/Line2.js';
+        import { LineGeometry } from 'https://unpkg.com/three@0.128.0/examples/jsm/lines/LineGeometry.js';
+        import { LineMaterial } from 'https://unpkg.com/three@0.128.0/examples/jsm/lines/LineMaterial.js';
+
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 50);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(0, 1, 1);
+        scene.add(directionalLight);
+
+        // --- Dojo-Themed Objects ---
+        const types = ["ninjaStar", "dojo", "katana", "trainingDummy"];
+        const typeColors = {
+            "ninjaStar": 0x000000,
+            "dojo": 0x8B4513,
+            "katana": 0xC0C0C0,
+            "trainingDummy": 0x4CAF50
+        };
+
+        let objects = [];
+        let score = 0;
+        const gravity = -0.2;
+
+        function spawnObject() {
+            const type = types[Math.floor(Math.random() * types.length)];
+            const radius = 3;
+            const geometry = new THREE.SphereGeometry(radius, 32, 32);
+            const material = new THREE.MeshPhongMaterial({ color: typeColors[type] });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.userData = {
+                type: type,
+                radius: radius,
+                sliced: false,
+                velocity: new THREE.Vector3(
+                    (Math.random() - 0.5) * 1.5,
+                    Math.random() * 2 + 10,
+                    (Math.random() - 0.5) * 1.5
+                )
+            };
+            mesh.position.set(
+                (Math.random() - 0.5) * 40,
+                -30,
+                (Math.random() - 0.5) * 20
+            );
+            scene.add(mesh);
+            objects.push(mesh);
+        }
+
+        function spawnObjectsPeriodically() {
+            if (objects.length < 10 && Math.random() < 0.02) {
+                spawnObject();
+            }
+        }
+
+        // --- Slicing Trail with Variable Thickness ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let isMouseDown = false;
+
+        // We'll use a slicing plane (at z = 0) to convert the 2D mouse position into a 3D world coordinate.
+        const slicingPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+        // For computing movement speed.
+        let lastIntersectionPoint = null;
+        let lastTime = null;
+
+        // We'll store each slicing segment so we can update (fade out) and remove them.
+        const slicingSegments = [];
+
+        // Creates a slicing segment (a red line) between two points.
+        // The "speed" value (normalized between 0 and 1) is mapped to a linewidth.
+        function createSlicingSegment(startPoint, endPoint, speed) {
+            // Map speed to thickness: slower movement gives thinner lines,
+            // faster movement gives thicker lines.
+            const minThickness = 2; // world units (when speed is 0)
+            const maxThickness = 6; // world units (when speed is 1 or more)
+            const thickness = THREE.MathUtils.clamp(minThickness + (maxThickness - minThickness) * speed, minThickness, maxThickness);
+
+            const positions = [
+                startPoint.x, startPoint.y, startPoint.z,
+                endPoint.x, endPoint.y, endPoint.z
+            ];
+            const lineGeometry = new LineGeometry();
+            lineGeometry.setPositions(positions);
+
+            const lineMaterial = new LineMaterial({
+                color: 0xffffff,
+                linewidth: thickness, // linewidth is in world units.
+                transparent: true,
+                opacity: 1
+            });
+            lineMaterial.resolution.set(window.innerWidth, window.innerHeight);
+
+            const line = new Line2(lineGeometry, lineMaterial);
+            line.computeLineDistances();
+            scene.add(line);
+
+            slicingSegments.push({ line, material: lineMaterial });
+        }
+
+        // Convert mouse event to a 3D point on the slicing plane.
+        function getIntersectionPoint(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersectionPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(slicingPlane, intersectionPoint);
+            return intersectionPoint;
+        }
+
+        // --- Mouse Event Handlers ---
+        function onMouseDown(event) {
+            isMouseDown = true;
+            lastIntersectionPoint = getIntersectionPoint(event);
+            lastTime = performance.now();
+        }
+
+        function onMouseUp(event) {
+            isMouseDown = false;
+            lastIntersectionPoint = null;
+            lastTime = null;
+        }
+
+        function onMouseMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+
+            if (isMouseDown) {
+                const currentPoint = getIntersectionPoint(event);
+                const currentTime = performance.now();
+                if (lastIntersectionPoint) {
+                    // Calculate the distance and time difference to derive speed.
+                    const distance = currentPoint.distanceTo(lastIntersectionPoint);
+                    const timeDiff = (currentTime - lastTime) / 1000; // seconds
+                    let speed = timeDiff > 0 ? distance / timeDiff : 0;
+                    // Normalize speed for mapping (cap at 50 units/sec).
+                    speed = Math.min(speed / 50, 1);
+                    // Create a slicing segment between the previous and current points.
+                    createSlicingSegment(lastIntersectionPoint, currentPoint, speed);
+                }
+                lastIntersectionPoint = currentPoint;
+                lastTime = currentTime;
+
+                // --- Slicing Detection ---
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(objects);
+                if (intersects.length > 0) {
+                    intersects.forEach(intersect => {
+                        const obj = intersect.object;
+                        if (!obj.userData.sliced) {
+                            obj.userData.sliced = true;
+                            scene.remove(obj);
+                            objects.splice(objects.indexOf(obj), 1);
+                            score++;
+                            document.getElementById("score").innerText = "Score: " + score;
+                        }
+                    });
+                }
+            }
+        }
+
+        window.addEventListener('mousedown', onMouseDown, false);
+        window.addEventListener('mouseup', onMouseUp, false);
+        window.addEventListener('mousemove', onMouseMove, false);
+
+        // Update slicing segments: fade them out gradually.
+        function updateSlicingSegments() {
+            for (let i = slicingSegments.length - 1; i >= 0; i--) {
+                const seg = slicingSegments[i];
+                seg.material.opacity -= 0.02;
+                if (seg.material.opacity <= 0) {
+                    scene.remove(seg.line);
+                    slicingSegments.splice(i, 1);
+                } else {
+                    seg.material.needsUpdate = true;
+                }
+            }
+        }
+
+        // --- Main Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            spawnObjectsPeriodically();
+
+            // Update active objects (movement, gravity, rotation).
+            objects.forEach(obj => {
+                obj.position.add(obj.userData.velocity.clone().multiplyScalar(0.1));
+                obj.userData.velocity.y += gravity * 0.1;
+                obj.rotation.x += 0.1;
+                obj.rotation.y += 0.1;
+            });
+
+            updateSlicingSegments();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- Handle Window Resize ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>
